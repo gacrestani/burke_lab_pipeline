@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 import argparse
 import io
 import re
@@ -41,6 +41,7 @@ for line in fhandle:
         line_list = re.split(r"\s+", line_stripped)
         
         # if it is marked as PASS
+        print(line_list[6])
         if line_list[6] == "PASS":
 
             # and if it is bi-allelic
@@ -64,7 +65,7 @@ for line in fhandle:
                                         
                     else:
                         sample_i_list = re.split(r":", sample_i_info)
-                        print(sample_i_list)
+                        #print(sample_i_list)
                         dp_count = sample_i_list[ids_to_index["DP"]]
                         ad_counts = sample_i_list[ids_to_index["AD"]]
                         minor_count = re.split(r",", ad_counts)[1]
@@ -77,7 +78,7 @@ for line in fhandle:
                     pos = line_list[1]
                     ref = line_list[3]
                     alt = line_list[4]
-                    outhandle.write(str(nmiss) + "\t" + chrom + "\t" + pos + "\t" + ref + "\t" + alt)
+                    outhandle.write(f"{nmiss}\t{chrom}\t{pos}\t{ref}\t{alt}")
                     for sample in samples:
                         minor_count = samples_to_counts[sample][0]
                         dp_count = samples_to_counts[sample][1]
@@ -86,11 +87,11 @@ for line in fhandle:
                 
                 
                 else:
-                    sys.stderr.write("Warning: skipping variant with: " + str(nmiss) + " missing variants: " + line_stripped + "\n")
+                    sys.stderr.write("Warning: skipping variant with: " + str(nmiss) + " missing variants! " + "\n")
                     
 
             else:
-                sys.stderr.write("Warning: skipping non-biallelic variant: " + line_stripped + "\n")
+                sys.stderr.write("Warning: skipping non-biallelic variant: " + "\n")
 
 
 fhandle.close()    

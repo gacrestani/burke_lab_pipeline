@@ -9,6 +9,50 @@ log.info """\
 
 // Processes ===================================================================
 
+process FastQC {
+    
+    label 'io_intensive'
+    debug params.debug
+
+    publishDir (
+        [
+            path: "${params.results_directory}/logs/${task.process}/${population}/${task.hash}",
+            mode: 'copy',
+            pattern: ".command.*"
+        ],
+        [
+            path: "${params.results_directory}/reports/${task.process}/${population}",
+            mode: 'copy',
+            pattern: "fastqc_output/*"
+        ]
+    )
+
+    input:
+    tuple val(population), val(meta), path(reads), path(vcf) 
+
+    output:
+    tuple val(population), val(meta), path(reads), path(vcf), emit: reads
+    path(".command.*"), emit: logs
+    path("fastqc_output/*"), emit: fastqc_output
+    
+    
+    script:
+    // Calculate threads per job, ensuring at least 1 per fastqc instance
+    def threads_per_job = (task.cpus / reads.size()).floor() ?: 1
+
+    """
+    mkdir -p fastqc_output
+
+    for read in ${reads.join(' ')}; do
+        echo "Running FastQC on \$read with ${threads_per_job} threads"
+        fastqc --outdir fastqc_output --threads ${threads_per_job} \$read &
+    done
+    
+    # Wait for all background jobs to finish
+    wait
+    """
+}
+
 process BwaMem {
     // This process performs BWA MEM alignment on the provided read files
     // It then sorts the resulting SAM file into a BAM file
@@ -24,20 +68,17 @@ process BwaMem {
         pattern: ".command.*"
     )
 
+    // Input: population, metadata, and read files
     input: 
     tuple val(population), val(meta), path(reads), path(vcf) 
     
+    // Output: Sorted BAM file
     output: 
-    tuple (
-        val(population),
-        path("${reads[0].simpleName}_sorted.bam"),
-        emit: bam
-    )
+    tuple val(population), path("${reads[0].simpleName}_sorted.bam"), emit: bam
     path(".command.*"), emit: logs
 
-
     script:
-    // Define the Read Group string cleanly in Groovy
+    // Define the Read Group string
     def rg_string = "@RG\\tID:${meta.flow_cell}.${meta.lane}\\tSM:${population}\\tLB:${meta.internal_library_name}\\tPL:ILLUMINA\\tPU:${meta.flow_cell}.${meta.lane}.${meta.barcode}"
 
     // Efficiently split allocated CPUs between the two piped commands
@@ -48,9 +89,6 @@ process BwaMem {
     def mem_val = (task.memory.toGiga() / samtools_threads).toInteger()
     def mem_per_thread = "${Math.max(mem_val, 2)}G"
     
-    // Define a clear output BAM filename
-    def out_bam = "${population}_sorted.bam"
-
     """
     bwa mem -M \\
         -t ${bwa_threads} \\
@@ -58,9 +96,9 @@ process BwaMem {
         ${params.reference_genome} \\
         ${reads.join(' ')} \\
     | samtools sort \\
-        --threads ${samtools_threads} \\
+        --threads ${samtools_threads} \
         -m ${mem_per_thread} \\
-        -o ${out_bam}
+        -o ${reads[0].simpleName}_sorted.bam
     """
     
     stub:
@@ -76,31 +114,29 @@ process MergeSamFiles {
     label 'io_intensive'
     debug params.debug
 
+    // Publishing logs from the command execution
     publishDir (
         path: "${params.results_directory}/logs/${task.process}/${population}/",
         mode: 'copy',
         pattern: ".command.*"
     )
 
+    // Input: population and list of BAM files
     input:
     tuple val(population), path(bam)
 
+    // Output: Merged BAM file, and its index BAI file
     output:
-    tuple (
-        val(population),
-        path("${population}.bam"),
-        path("${population}.bai"),
-        emit: bam
-    )
+    tuple val(population), path("${population}.bam"), path("${population}.bai"), emit: bam
     path(".command.*"), emit: logs
 
+    // First create a bams_list with all bam files passed as input
     script:
-    def input_bams = bam.collect{ "--INPUT ${it}" }.join(' ')
-
+    def bams_list = bam.collect{"--INPUT $it"}.join(' ')
     """
-    gatk --java-options "-Xmx${task.memory.giga}G -Xms4G" \\
+    gatk --java-options '-Xmx${task.memory.giga}G -Xms4G' \\
         MergeSamFiles \\
-        ${input_bams} \\
+        ${bams_list} \\
         --OUTPUT ${population}.bam \\
         --CREATE_INDEX true \\
         --USE_THREADING true \\
@@ -121,8 +157,9 @@ process MarkDuplicates {
     label 'high_mem_single'
     debug params.debug
 
+    // Publishing the duplicate_metrics.txt file if required for future analyses
     publishDir (
-        path: "${params.results_directory}/intermediate_files/${population}",
+        path: "${params.results_directory}/intermediate_files/${population}/",
         mode: 'copy',
         pattern: "*.txt"
     )
@@ -132,27 +169,26 @@ process MarkDuplicates {
         pattern: ".command.*"
     )
 
+    // Input: population, BAM file, and its index BAI file
     input:
     tuple val(population), path(bam), path(bai)
 
+    // Output: BAM file with duplicates marked, and its index BAI file
     output:
-    tuple (
-        val(population),
-        path("${population}_duplicates_marked.bam"),
-        path("${population}_duplicates_marked.bai"),
-        emit: bam
-    )
+    tuple (val(population), path("${population}_duplicates_marked.bam"), path("${population}_duplicates_marked.bai"), emit: bam)
     path("${population}_duplicate_metrics.txt")
     path(".command.*"), emit: logs
 
     script:
     """
-    gatk --java-options '-Xmx${task.memory.giga}G' \\
+    gatk --java-options '-Xmx${task.memory.giga}G -Xms4G' \\
         MarkDuplicates \\
         --INPUT ${bam} \\
-        --OUTPUT ${population}_duplicates_marked.bam \\
         --METRICS_FILE ${population}_duplicate_metrics.txt \\
+        --OUTPUT ${population}_duplicates_marked.bam \\
         --OPTICAL_DUPLICATE_PIXEL_DISTANCE 2500 \\
+        --VALIDATION_STRINGENCY SILENT \\
+        --ASSUME_SORTED true \\
         --CREATE_INDEX true \\
         --TMP_DIR ${params.scratch_directory}
     """
@@ -173,6 +209,7 @@ process BaseRecalibrator {
     label 'high_mem_single'
     debug params.debug
 
+    // Publishing the recalibration table if required for future analyses
     publishDir (
         path: "${params.results_directory}/intermediate_files/${population}",
         mode: 'copy',
@@ -184,26 +221,19 @@ process BaseRecalibrator {
         pattern: ".command.*"
     )
 
+    // Input: population, duplication-marked BAM file, and its index TBI file
+    // This process uses the known variant sites (reference VCF file)
     input:
-    tuple (
-        val(population),
-        path(duplicates_marked_bam),
-        path(duplicates_marked_bai)
-    )
+    tuple val(population), path(duplicates_marked_bam), path(duplicates_marked_bai)
 
+    // Output: recalibrated BAM and recalibration report
     output:
-    tuple (
-        val(population),
-        path(duplicates_marked_bam),
-        path(duplicates_marked_bai),
-        path("${population}_recalibration_metrics.table"),
-        emit: bam
-    )
+    tuple val(population), path(duplicates_marked_bam), path(duplicates_marked_bai), path("${population}_recalibration_metrics.table"), emit: bam
     path(".command.*"), emit: logs
 
     script:
     """
-    gatk --java-options "-Xmx${task.memory.giga}G -Xms4G" \\
+    gatk --java-options '-Xmx${task.memory.giga}G -Xms4G' \\
         BaseRecalibrator \\
         --input ${duplicates_marked_bam} \\
         --known-sites ${params.bqsr_vcf} \\
@@ -214,8 +244,6 @@ process BaseRecalibrator {
 
     stub:
     """
-    touch ${population}_duplicates_marked.bam
-    touch ${population}_duplicates_marked.bai
     touch ${population}_recalibration_metrics.table
     """
 }
@@ -228,33 +256,33 @@ process ApplyBQSR {
     label 'high_mem_single'
     debug params.debug
     
+    // Publishing the final BAM Files before turning then into VCFs
+    // Change: no need to save .bam files. Commenting out this section.
+    // publishDir (
+    //     path: "${params.results_directory}/intermediate_files/${population}",
+    //     mode: 'copy',
+    //     pattern: "*.bam*" // Publishes both .bam and .bai
+    // )
     publishDir (
         path: "${params.results_directory}/logs/${task.process}/${population}/",
         mode: 'copy',
         pattern: ".command.*"
     )
 
+    // Input: population, duplication-marked BAM file, reference genome, and recalibration report
     input:
-    tuple (
-        val(population),
-        path(duplicates_marked_bam),
-        path(duplicates_marked_bai),
-        path(recalibration_metrics_table)
-    )
+    tuple val(population), path(duplicates_marked_bam), path(duplicates_marked_bai), path(recalibration_metrics_table)
 
+    // Output: Recalibrated BAM file
     output:
-    tuple (
-        val(population),
-        path("${population}_haplotype_this.bam"),
-        path("${population}_haplotype_this.bai"),
-        emit: bam
-    )
+    tuple val(population), path("${population}_haplotype_this.bam"), path("${population}_haplotype_this.bai"), emit: bam
     path(".command.*"), emit: logs
 
     script:
     """
-    gatk --java-options '-Xmx${task.memory.giga}G' \\
+    gatk --java-options '-Xmx${task.memory.giga}G -Xms4G' \\
         ApplyBQSR \\
+        --reference ${params.reference_genome} \\
         --bqsr-recal-file ${recalibration_metrics_table} \\
         --create-output-bam-index true \\
         --input ${duplicates_marked_bam} \\
@@ -277,29 +305,23 @@ process HaplotypeCaller {
     label 'parallel_per_sample'
     debug params.debug
 
+    // Publishing the VCF file and its index TBI file
     publishDir (
-        path: "${params.project_directory}/intermediate_vcfs/${population}",
+        path: "${params.vcf_directory}/${population}",
         mode: 'copy',
-        pattern: "*.g.vcf.gz"
-    )
-    publishDir (
-        path: "${params.project_directory}/intermediate_vcfs/${population}",
-        mode: 'copy',
-        pattern: "*.tbi"
+        pattern: "*.g.vcf.gz*" // Catches both .gz and .tbi
     )
     publishDir (
         path: "${params.results_directory}/logs/${task.process}/${population}/",
         mode: 'copy',
         pattern: ".command.*"
     )
-
+    
+    // Input: population, recalibrated BAM file, reference genome
     input:
-    tuple (
-        val(population),
-        path(haplotype_this_bam),
-        path(haplotype_this_bai)
-    )
+    tuple val(population), path(haplotype_this_bam), path(haplotype_this_bai)
 
+    // Output: G.VCF file and its index TBI file
     output:
     path("${population}_haplotype_caller_results.g.vcf.gz"), emit: vcf
     path("${population}_haplotype_caller_results.g.vcf.gz.tbi"), emit: tbi
@@ -307,11 +329,12 @@ process HaplotypeCaller {
 
     script:
     """
-    gatk --java-options "-Xmx${task.memory.giga}G -Xms4G" \\
-        HaplotypeCaller -R ${params.reference_genome} \\
-        -ERC GVCF \\
+    gatk --java-options '-Xmx${task.memory.giga}G -Xms4G' \\
+        HaplotypeCaller \\
+        -R ${params.reference_genome} \\
         -I ${haplotype_this_bam} \\
         -O ${population}_haplotype_caller_results.g.vcf.gz \\
+        -ERC GVCF \\
         --native-pair-hmm-threads ${task.cpus} \\
         --tmp-dir ${params.scratch_directory}
     """
