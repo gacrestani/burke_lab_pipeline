@@ -1,13 +1,20 @@
 #!/bin/bash
 
-echo "This will submit all the jobs. Submit? (yes/no): "
+RUN_ID="attempt_02"
+
+
+
+
+
+
+
+
+echo "This will submit all the jobs. Submit? (yes|y / no): "
 read input
-if [ "$input" != "yes" ]; then
+if [[ "$input" != "yes" && "$input" != "y" ]]; then
   echo "Quitting."
   exit
 fi
 
 # Run pipeline
-echo "nextflow run main.nf -ansi-log false" | hqsub - -q burke_lab -t array -r attempt_24 --local-drive shared --local-prefix /scratch/workingdir
-
-
+echo "nextflow run main.nf -ansi-log false -resume" | hqsub - -q burke_lab -t array -r "$RUN_ID" --local-drive shared --local-prefix /scratch/nextflow_pipeline_scratc
