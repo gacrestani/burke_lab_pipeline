@@ -825,8 +825,7 @@ workflow {
     .map { row ->
         fastq1_path = params.samples_directory + row.fastq1
         fastq2_path = row.fastq2 ? params.samples_directory + row.fastq2 : null
-        vcf_path = params.results_directory +
-            "intermediate_files/" +
+        vcf_path = params.vcf_directory +
             row.population + "/" +
             row.population + "_haplotype_caller_results.g.vcf.gz"
 
@@ -890,6 +889,6 @@ workflow {
     SnpEff(VariantFiltration.out.vcf.flatten())
     VariantsToTable(SnpEff.out.vcf)
    
-    // Create the filtered_snps.txt file we know and love
+    // Create the filtered_snps.txt file
     VcfToTable(VariantFiltration.out.vcf.flatten())
 }
