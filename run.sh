@@ -17,4 +17,6 @@ if [[ "$input" != "yes" && "$input" != "y" ]]; then
 fi
 
 # Run pipeline
-echo "nextflow run main.nf -ansi-log false -resume" | hqsub - -q burke_lab -t array -r "$RUN_ID" --local-drive shared --local-prefix /scratch/nextflow_pipeline_scratc
+echo "nextflow run main.nf -ansi-log false -resume" | hqsub - -q burke_lab -t array -r "$RUN_ID" --local-drive shared --local-prefix /scratch/nextflow_pipeline_scratch
+
+
