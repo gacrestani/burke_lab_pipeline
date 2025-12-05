@@ -9,50 +9,6 @@ log.info """\
 
 // Processes ===================================================================
 
-process FastQC {
-    
-    label 'io_intensive'
-    debug params.debug
-
-    publishDir (
-        [
-            path: "${params.results_directory}/logs/${task.process}/${population}/${task.hash}",
-            mode: 'copy',
-            pattern: ".command.*"
-        ],
-        [
-            path: "${params.results_directory}/reports/${task.process}/${population}",
-            mode: 'copy',
-            pattern: "fastqc_output/*"
-        ]
-    )
-
-    input:
-    tuple val(population), val(meta), path(reads), path(vcf) 
-
-    output:
-    tuple val(population), val(meta), path(reads), path(vcf), emit: reads
-    path(".command.*"), emit: logs
-    path("fastqc_output/*"), emit: fastqc_output
-    
-    
-    script:
-    // Calculate threads per job, ensuring at least 1 per fastqc instance
-    def threads_per_job = (task.cpus / reads.size()).floor() ?: 1
-
-    """
-    mkdir -p fastqc_output
-
-    for read in ${reads.join(' ')}; do
-        echo "Running FastQC on \$read with ${threads_per_job} threads"
-        fastqc --outdir fastqc_output --threads ${threads_per_job} \$read &
-    done
-    
-    # Wait for all background jobs to finish
-    wait
-    """
-}
-
 process BwaMem {
     // This process performs BWA MEM alignment on the provided read files
     // It then sorts the resulting SAM file into a BAM file
@@ -134,7 +90,7 @@ process MergeSamFiles {
     script:
     def bams_list = bam.collect{"--INPUT $it"}.join(' ')
     """
-    gatk --java-options '-Xmx${task.memory.giga}G -Xms4G' \\
+    ${params.gatk} --java-options '-Xmx${task.memory.giga}G -Xms4G' \\
         MergeSamFiles \\
         ${bams_list} \\
         --OUTPUT ${population}.bam \\
@@ -181,7 +137,7 @@ process MarkDuplicates {
 
     script:
     """
-    gatk --java-options '-Xmx${task.memory.giga}G -Xms4G' \\
+    ${params.gatk} --java-options '-Xmx${task.memory.giga}G -Xms4G' \\
         MarkDuplicates \\
         --INPUT ${bam} \\
         --METRICS_FILE ${population}_duplicate_metrics.txt \\
@@ -233,7 +189,7 @@ process BaseRecalibrator {
 
     script:
     """
-    gatk --java-options '-Xmx${task.memory.giga}G -Xms4G' \\
+    ${params.gatk} --java-options '-Xmx${task.memory.giga}G -Xms4G' \\
         BaseRecalibrator \\
         --input ${duplicates_marked_bam} \\
         --known-sites ${params.bqsr_vcf} \\
@@ -280,7 +236,7 @@ process ApplyBQSR {
 
     script:
     """
-    gatk --java-options '-Xmx${task.memory.giga}G -Xms4G' \\
+    ${params.gatk} --java-options '-Xmx${task.memory.giga}G -Xms4G' \\
         ApplyBQSR \\
         --reference ${params.reference_genome} \\
         --bqsr-recal-file ${recalibration_metrics_table} \\
@@ -329,7 +285,7 @@ process HaplotypeCaller {
 
     script:
     """
-    gatk --java-options '-Xmx${task.memory.giga}G -Xms4G' \\
+    ${params.gatk} --java-options '-Xmx${task.memory.giga}G -Xms4G' \\
         HaplotypeCaller \\
         -R ${params.reference_genome} \\
         -I ${haplotype_this_bam} \\
@@ -379,20 +335,13 @@ process CombineGVCFs { // Maybe GenomicsDB is better here
     def variant_list = vcfs.collect{"--variant ${it}"}.join(' ')
     def variant_tbi_list = tbis.collect{"--read-index ${it}"}.join(' ')
     """
-    # gatk CombineGVCFs script
-    # Defining the command
-    cmd="gatk --java-options '-Xmx${task.memory.giga}G' \
+    ${params.gatk} --java-options '-Xmx${task.memory.giga}G -Xms4G' \
         CombineGVCFs \
         -R ${params.reference_genome} \
         ${variant_list} \
         -O combined.g.vcf.gz \
         ${variant_tbi_list} \
-        --tmp-dir ${params.scratch_directory}"
-
-    echo "\$cmd"
-    
-    # Run command
-    eval \$cmd
+        --tmp-dir ${params.scratch_directory}
     """
 
     stub:
@@ -434,20 +383,13 @@ process GenotypeGVCFs {
 
     script:
     """
-    # gatk GenotypeGVCFs script
-    # Defining the command
-    cmd="gatk --java-options '-Xmx${task.memory.giga}G' \
+    ${params.gatk} --java-options '-Xmx${task.memory.giga}G -Xms4G' \
         GenotypeGVCFs \
         -R ${params.reference_genome} \
         -V ${combined_g_vcf_gz} \
         -O all_samples_raw.vcf.gz \
         --read-index ${combined_g_vcf_gz_tbi} \
-        --tmp-dir ${params.scratch_directory}"
-
-    echo "\$cmd"
-    
-    # Run command
-    eval \$cmd
+        --tmp-dir ${params.scratch_directory}
     """
 
     stub:
@@ -491,17 +433,15 @@ process SelectVariants { // This could be broken into two different processes
 
     script:
     """
-    # gatk SelectVariants script
-    # Defining commands
-    cmdA="gatk --java-options '-Xmx${task.memory.giga}G' \
+    ${params.gatk} --java-options '-Xmx${task.memory.giga}G -Xms4G' \
         SelectVariants \
         --variant ${all_samples_raw_vcf_gz} \
         --output raw_snps.vcf.gz \
         --select-type-to-include SNP \
         --read-index ${all_samples_raw_vcf_gz_tbi} \
-        --tmp-dir ${params.scratch_directory}"
+        --tmp-dir ${params.scratch_directory}
 
-    cmdB="gatk --java-options '-Xmx${task.memory.giga}G' \
+    ${params.gatk} --java-options '-Xmx${task.memory.giga}G -Xms4G' \
         SelectVariants \
         --variant ${all_samples_raw_vcf_gz} \
         --output raw_indels.vcf.gz \
@@ -509,14 +449,7 @@ process SelectVariants { // This could be broken into two different processes
         --select-type-to-include MIXED \
         --exclude-non-variants \
         --read-index ${all_samples_raw_vcf_gz_tbi} \
-        --tmp-dir ${params.scratch_directory}"
-    
-    echo "\$cmdA"
-    echo "\$cmdB"
-
-    # Run command
-    eval \$cmdA
-    eval \$cmdB
+        --tmp-dir ${params.scratch_directory}
     """
 
     stub:
@@ -569,9 +502,7 @@ process VariantFiltration { // Could be broken into two processes
 
     script:
     """
-    # gatk VariantFiltration script
-    # Defining command
-    cmdA="gatk --java-options '-Xmx${task.memory.giga}G' \
+    ${params.gatk} --java-options '-Xmx${task.memory.giga}G -Xms4G' \
         VariantFiltration \
         --read-index ${raw_snps_vcf_gz_tbi} \
         --variant ${raw_snps_vcf_gz} \
@@ -586,9 +517,9 @@ process VariantFiltration { // Could be broken into two processes
         --filter-expression \\"ReadPosRankSum < -8.0\\" \
         --filter-name MQRankSum \
         --filter-expression \\"MQRankSum < -12.5\\" \
-        --tmp-dir ${params.scratch_directory}"
+        --tmp-dir ${params.scratch_directory}
 
-    cmdB="gatk --java-options '-Xmx${task.memory.giga}G' \
+    ${params.gatk} --java-options '-Xmx${task.memory.giga}G' \
         VariantFiltration \
         --read-index ${raw_indels_vcf_gz_tbi} \
         --variant ${raw_indels_vcf_gz} \
@@ -599,14 +530,7 @@ process VariantFiltration { // Could be broken into two processes
         --filter-expression \\"FS > 200.0\\" \
         --filter-name ReadPosRank \
         --filter-expression \\"ReadPosRankSum < -20.0\\" \
-        --tmp-dir ${params.scratch_directory}"
-
-    echo "\$cmdA"
-    echo "\$cmdB"
-
-    # Run command
-    eval \$cmdA
-    eval \$cmdB
+        --tmp-dir ${params.scratch_directory}
     """
 
     stub:
@@ -669,20 +593,12 @@ process SnpEff {
 
     script:
     """
-    # SnpEff script
-    # Defining commands
-    cmd="snpEff -Xmx${task.memory.giga}G \
+    snpEff -Xmx${task.memory.giga}G \
         -v -dataDir ${params.scratch_directory} \
         -csvStats snpeff_stats.csv \
         ${params.snpeff_organism} \
         ${filtered_vcf} \
-        > ${filtered_vcf.baseName}_ann.vcf"
-
-    echo "\$cmd"
-    echo "SnpEff"
-
-    # Run command
-    eval \$cmd
+        > ${filtered_vcf.baseName}_ann.vcf
     """
 
     stub:
@@ -730,9 +646,7 @@ process VariantsToTable {
 
     script:
     """
-    # gatk VariantsToTable script
-    # Defining command
-    cmd="gatk --java-options '-Xmx${task.memory.giga}G' \
+    ${params.gatk} --java-options '-Xmx${task.memory.giga}G -Xms4G' \
         VariantsToTable \
         -V ${filtered_ann_vcf} \
         -F CHROM \
@@ -750,12 +664,7 @@ process VariantsToTable {
         -GF GT \
         -GF AD \
         -O ${filtered_ann_vcf.baseName}.txt \
-        --tmp-dir ${params.scratch_directory}"
-
-    echo "\$cmd"
-
-    # Run command
-    eval \$cmd
+        --tmp-dir ${params.scratch_directory}
     """
 
     stub:
@@ -797,17 +706,10 @@ process VcfToTable {
 
     script:
     """
-    # VcfToTable script
-    # Defining the command
-    cmd="vcf_to_table.py \
+    vcf_to_table.py \
         --vcf ${filtered_vcf} \
         --output ${filtered_vcf.baseName}.txt \
         --num_allow_missing 0"
-
-    echo "\$cmd"
-    
-    # Run command
-    eval \$cmd
     """
 
     stub:
