@@ -508,15 +508,15 @@ process VariantFiltration { // Could be broken into two processes
         --variant ${raw_snps_vcf_gz} \
         --output filtered_snps.vcf \
         --filter-name LowVQCBD \
-        --filter-expression \\"QD < 5.0\\" \
+        --filter-expression 'QD < 5.0' \
         --filter-name LowQualSNPs \
-        --filter-expression \\"MQ < 40.0\\"  \
+        --filter-expression 'MQ < 40.0'  \
         --filter-name FisherStrand \
-        --filter-expression \\"FS > 60.0\\" \
+        --filter-expression 'FS > 60.0' \
         --filter-name ReadPosRank \
-        --filter-expression \\"ReadPosRankSum < -8.0\\" \
+        --filter-expression 'ReadPosRankSum < -8.0' \
         --filter-name MQRankSum \
-        --filter-expression \\"MQRankSum < -12.5\\" \
+        --filter-expression 'MQRankSum < -12.5' \
         --tmp-dir ${params.scratch_directory}
 
     ${params.gatk} --java-options '-Xmx${task.memory.giga}G' \
@@ -525,11 +525,11 @@ process VariantFiltration { // Could be broken into two processes
         --variant ${raw_indels_vcf_gz} \
         --output filtered_indels.vcf  \
         --filter-name LowVQCBD \
-        --filter-expression \\"QD < 5.0\\" \
+        --filter-expression 'QD < 5.0' \
         --filter-name FisherStrand \
-        --filter-expression \\"FS > 200.0\\" \
+        --filter-expression 'FS > 200.0' \
         --filter-name ReadPosRank \
-        --filter-expression \\"ReadPosRankSum < -20.0\\" \
+        --filter-expression 'ReadPosRankSum < -20.0' \
         --tmp-dir ${params.scratch_directory}
     """
 
@@ -592,8 +592,9 @@ process SnpEff {
     path(".command.*"), emit: logs
 
     script:
+    def heap_mem = (task.memory.toGiga() * 0.9 * 0.5).toInteger()
     """
-    snpEff -Xmx${task.memory.giga}G \
+    java -Xmx${heap_mem}G -Xms${heap_mem}G -jar /nfs6/TMP/Burke_Lab/shared_data/snpEff/snpEff.jar \
         -v -dataDir ${params.scratch_directory} \
         -csvStats snpeff_stats.csv \
         ${params.snpeff_organism} \
@@ -709,7 +710,7 @@ process VcfToTable {
     vcf_to_table.py \
         --vcf ${filtered_vcf} \
         --output ${filtered_vcf.baseName}.txt \
-        --num_allow_missing 0"
+        --num_allow_missing 0
     """
 
     stub:
@@ -787,9 +788,9 @@ workflow {
     SelectVariants(GenotypeGVCFs.out.vcf)
     VariantFiltration(SelectVariants.out.vcf)
    
-    // Annotation
-    SnpEff(VariantFiltration.out.vcf.flatten())
-    VariantsToTable(SnpEff.out.vcf)
+    // // Annotation
+    // SnpEff(VariantFiltration.out.vcf.flatten())
+    // VariantsToTable(SnpEff.out.vcf)
    
     // Create the filtered_snps.txt file
     VcfToTable(VariantFiltration.out.vcf.flatten())
