@@ -14,7 +14,9 @@ process BwaMem {
     // It then sorts the resulting SAM file into a BAM file
     // It takes the reads and meta information, runs the alignment, and outputs a sorted BAM file
 
-    label 'parallel_per_sample' 
+    // label 'parallel_per_sample' 
+    cpus 32
+    memory '64 GB'
     debug params.debug
     
     // Publishing logs from the command execution
@@ -67,7 +69,9 @@ process MergeSamFiles {
     // This process merges multiple BAM files into a single BAM file using GATK's MergeSamFiles tool
     // It takes several BAM files as input, and outputs the merged BAM file.
 
-    label 'io_intensive'
+    // label 'io_intensive'
+    cpus 4
+    memory '64 GB'
     debug params.debug
 
     // Publishing logs from the command execution
@@ -89,13 +93,16 @@ process MergeSamFiles {
     // First create a bams_list with all bam files passed as input
     script:
     def bams_list = bam.collect{"--INPUT $it"}.join(' ')
+    def heap_mem = (task.memory.toGiga() * 0.9).toInteger()
     """
-    ${params.gatk} --java-options '-Xmx${task.memory.giga}G -Xms4G' \\
+    ${params.gatk} --java-options '-Xmx${heap_mem}G -Xms${heap_mem}G -XX:+UseParallelGC' \\
         MergeSamFiles \\
         ${bams_list} \\
         --OUTPUT ${population}.bam \\
         --CREATE_INDEX true \\
         --USE_THREADING true \\
+        --SORT_ORDER coordinate \\
+        --MAX_RECORDS_IN_RAM=20000000 \\
         --TMP_DIR ${params.scratch_directory}
     """
 
@@ -106,11 +113,14 @@ process MergeSamFiles {
     """
 }
 
-process MarkDuplicates {
+process MarkDuplicatesSpark
+ {
     // This process marks duplicates in a BAM file using Picard's MarkDuplicates tool
     // It takes a BAM file as input, marks the duplicates, and outputs a BAM file with duplicates marked.
 
-    label 'high_mem_single'
+    // label 'parallel_per_sample'
+    cpus 16
+    memory '64 GB'
     debug params.debug
 
     // Publishing the duplicate_metrics.txt file if required for future analyses
@@ -136,17 +146,20 @@ process MarkDuplicates {
     path(".command.*"), emit: logs
 
     script:
+    def heap_mem = (task.memory.toGiga() * 0.9).toInteger()
     """
-    ${params.gatk} --java-options '-Xmx${task.memory.giga}G -Xms4G' \\
-        MarkDuplicates \\
+    ${params.gatk} --java-options '-Xmx${heap_mem}G -Xms${heap_mem}G' \\
+        MarkDuplicatesSpark \\
         --INPUT ${bam} \\
         --METRICS_FILE ${population}_duplicate_metrics.txt \\
         --OUTPUT ${population}_duplicates_marked.bam \\
+        --spark-master local[${task.cpus}] \
+        --conf 'spark.executor.cores=${task.cpus}' \
+        --conf 'spark.local.dir=./tmp_spark' \
         --OPTICAL_DUPLICATE_PIXEL_DISTANCE 2500 \\
         --VALIDATION_STRINGENCY SILENT \\
         --ASSUME_SORTED true \\
-        --CREATE_INDEX true \\
-        --TMP_DIR ${params.scratch_directory}
+        --CREATE_INDEX true
     """
 
     stub:
@@ -162,7 +175,9 @@ process BaseRecalibrator {
     // It takes a sorted BAM file and a reference genome, applies base recalibration,
     // and produces a recalibrated BAM file and a recalibration report.
 
-    label 'high_mem_single'
+    // label 'high_mem_single'
+    cpus 2
+    memory '16 GB'
     debug params.debug
 
     // Publishing the recalibration table if required for future analyses
@@ -188,8 +203,9 @@ process BaseRecalibrator {
     path(".command.*"), emit: logs
 
     script:
+    def heap_mem = (task.memory.toGiga() * 0.9).toInteger()
     """
-    ${params.gatk} --java-options '-Xmx${task.memory.giga}G -Xms4G' \\
+    ${params.gatk} --java-options '-Xmx${heap_mem}G -Xms${heap_mem}G' \\
         BaseRecalibrator \\
         --input ${duplicates_marked_bam} \\
         --known-sites ${params.bqsr_vcf} \\
@@ -209,7 +225,9 @@ process ApplyBQSR {
     // It takes the original BAM file and a recalibration report, applies the recalibration,
     // and outputs the recalibrated BAM file.
 
-    label 'high_mem_single'
+    // label 'highly_parallel'
+    cpus 2
+    memory '8 GB'
     debug params.debug
     
     // Publishing the final BAM Files before turning then into VCFs
@@ -235,8 +253,9 @@ process ApplyBQSR {
     path(".command.*"), emit: logs
 
     script:
+    def heap_mem = (task.memory.toGiga() * 0.9).toInteger()
     """
-    ${params.gatk} --java-options '-Xmx${task.memory.giga}G -Xms4G' \\
+    ${params.gatk} --java-options '-Xmx${heap_mem}G -Xms${heap_mem}G -Dsamjdk.compression_level=5' \\
         ApplyBQSR \\
         --reference ${params.reference_genome} \\
         --bqsr-recal-file ${recalibration_metrics_table} \\
@@ -258,7 +277,9 @@ process HaplotypeCaller {
     // It takes a recalibrated BAM file and a reference genome, applies the variant calling,
     // and outputs a GVCF file with the called variants.
 
-    label 'parallel_per_sample'
+    // label 'parallel_per_sample'
+    cpus 4
+    memory '16 GB'
     debug params.debug
 
     // Publishing the VCF file and its index TBI file
@@ -284,8 +305,9 @@ process HaplotypeCaller {
     path(".command.*"), emit: logs
 
     script:
+    def heap_mem = (task.memory.toGiga() * 0.9).toInteger()
     """
-    ${params.gatk} --java-options '-Xmx${task.memory.giga}G -Xms4G' \\
+    ${params.gatk} --java-options '-Xmx${heap_mem}G -Xms${heap_mem}G' \\
         HaplotypeCaller \\
         -R ${params.reference_genome} \\
         -I ${haplotype_this_bam} \\
@@ -306,7 +328,9 @@ process CombineGVCFs { // Maybe GenomicsDB is better here
     // This process combines multiple GVCF files into a single GVCF file using GATK's CombineGVCFs tool
     // It takes multiple GVCF files as input, combines them, and outputs a single merged GVCF file.
 
-    label 'joint_calling'
+    // label 'io_intensive'
+    cpus 2
+    memory '32 GB'
     debug params.debug
 
     // Publishing logs from the command execution
@@ -334,8 +358,9 @@ process CombineGVCFs { // Maybe GenomicsDB is better here
     script:
     def variant_list = vcfs.collect{"--variant ${it}"}.join(' ')
     def variant_tbi_list = tbis.collect{"--read-index ${it}"}.join(' ')
+    def heap_mem = (task.memory.toGiga() * 0.9).toInteger()
     """
-    ${params.gatk} --java-options '-Xmx${task.memory.giga}G -Xms4G' \
+    ${params.gatk} --java-options '-Xmx${heap_mem}G -Xms${heap_mem}G' \
         CombineGVCFs \
         -R ${params.reference_genome} \
         ${variant_list} \
@@ -355,7 +380,9 @@ process GenotypeGVCFs {
     // This process runs GATK's GenotypeGVCFs to perform variant calling on a combined GVCF file
     // It takes a combined GVCF file, applies the genotyping, and outputs a VCF file with the called variants.
 
-    label 'joint_calling'
+    // label 'io_intensive'
+    cpus 2
+    memory '32 GB'
     debug params.debug
 
     // Publishing logs from the command execution
@@ -382,8 +409,9 @@ process GenotypeGVCFs {
     path(".command.*"), emit: logs
 
     script:
+    def heap_mem = (task.memory.toGiga() * 0.9).toInteger()
     """
-    ${params.gatk} --java-options '-Xmx${task.memory.giga}G -Xms4G' \
+    ${params.gatk} --java-options '-Xmx${heap_mem}G -Xms${heap_mem}G' \
         GenotypeGVCFs \
         -R ${params.reference_genome} \
         -V ${combined_g_vcf_gz} \
@@ -404,7 +432,9 @@ process SelectVariants { // This could be broken into two different processes
     // It takes a VCF file, applies selection criteria (e.g., specific variants, regions, etc.),
     // and outputs a filtered VCF file containing only the selected variants.
 
-    label 'high_mem_single'
+    // label 'io_intensive'
+    cpus 1
+    memory '8 GB'
     debug params.debug
 
     // Publishing logs from the command execution
@@ -432,8 +462,9 @@ process SelectVariants { // This could be broken into two different processes
     path(".command.*"), emit: logs
 
     script:
+    def heap_mem = (task.memory.toGiga() * 0.9 * 0.5).toInteger()
     """
-    ${params.gatk} --java-options '-Xmx${task.memory.giga}G -Xms4G' \
+    ${params.gatk} --java-options '-Xmx${heap_mem}G -Xms${heap_mem}G' \
         SelectVariants \
         --variant ${all_samples_raw_vcf_gz} \
         --output raw_snps.vcf.gz \
@@ -441,7 +472,7 @@ process SelectVariants { // This could be broken into two different processes
         --read-index ${all_samples_raw_vcf_gz_tbi} \
         --tmp-dir ${params.scratch_directory}
 
-    ${params.gatk} --java-options '-Xmx${task.memory.giga}G -Xms4G' \
+    ${params.gatk} --java-options '-Xmx${heap_mem}G -Xms${heap_mem}G' \
         SelectVariants \
         --variant ${all_samples_raw_vcf_gz} \
         --output raw_indels.vcf.gz \
@@ -466,7 +497,9 @@ process VariantFiltration { // Could be broken into two processes
     // It takes a VCF file, applies the specified filters (e.g., quality score, depth),
     // and outputs a filtered VCF file with only the variants passing the criteria.
 
-    label 'high_mem_single'
+    // label 'io_intensive'
+    cpus 1
+    memory '16 GB'
     debug params.debug
 
     // Publishing the filtered VCF
@@ -501,8 +534,9 @@ process VariantFiltration { // Could be broken into two processes
     path(".command.*"), emit: logs
 
     script:
+    def heap_mem = (task.memory.toGiga() * 0.9 * 0.5).toInteger()
     """
-    ${params.gatk} --java-options '-Xmx${task.memory.giga}G -Xms4G' \
+    ${params.gatk} --java-options '-Xmx${heap_mem}G -Xms${heap_mem}G' \
         VariantFiltration \
         --read-index ${raw_snps_vcf_gz_tbi} \
         --variant ${raw_snps_vcf_gz} \
@@ -519,7 +553,7 @@ process VariantFiltration { // Could be broken into two processes
         --filter-expression \\"MQRankSum < -12.5\\" \
         --tmp-dir ${params.scratch_directory}
 
-    ${params.gatk} --java-options '-Xmx${task.memory.giga}G' \
+    ${params.gatk} --java-options '-Xmx${heap_mem}G -Xms${heap_mem}G' \
         VariantFiltration \
         --read-index ${raw_indels_vcf_gz_tbi} \
         --variant ${raw_indels_vcf_gz} \
@@ -549,7 +583,9 @@ process SnpEff {
     // I believe it has to do with the chromosome renaming we have to do
     // we use chromosome1 instead of chrom1 (or vice-versa)
 
-    label 'high_mem_single'
+    // label 'high_mem_single'
+    cpus 2
+    memory '8 GB'
     debug params.debug
 
 
@@ -592,8 +628,9 @@ process SnpEff {
     path(".command.*"), emit: logs
 
     script:
+    def heap_mem = (task.memory.toGiga() * 0.9).toInteger()
     """
-    snpEff -Xmx${task.memory.giga}G \
+    snpEff -Xmx${heap_mem}G -Xms${heap_mem}G \
         -v -dataDir ${params.scratch_directory} \
         -csvStats snpeff_stats.csv \
         ${params.snpeff_organism} \
@@ -613,7 +650,9 @@ process VariantsToTable {
     // This output file could work as our primary snp_table too
     // It extracts specified fields from the VCF file and outputs them in a tabular format.
 
-    label 'io_intensive'
+    // label 'io_intensive'
+    cpus 1
+    memory '16 GB'
     debug params.debug
 
     // Publishing the txt files generated
@@ -645,8 +684,9 @@ process VariantsToTable {
     path(".command.*"), emit: logs
 
     script:
+    def heap_mem = (task.memory.toGiga() * 0.9).toInteger()
     """
-    ${params.gatk} --java-options '-Xmx${task.memory.giga}G -Xms4G' \
+    ${params.gatk} --java-options '-Xmx${heap_mem}G -Xms${heap_mem}G' \
         VariantsToTable \
         -V ${filtered_ann_vcf} \
         -F CHROM \
