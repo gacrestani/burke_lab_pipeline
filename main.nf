@@ -102,7 +102,7 @@ process MergeSamFiles {
         --CREATE_INDEX true \\
         --USE_THREADING true \\
         --SORT_ORDER coordinate \\
-        --MAX_RECORDS_IN_RAM=20000000 \\
+        --MAX_RECORDS_IN_RAM 20000000 \\
         --TMP_DIR ${params.scratch_directory}
     """
 
@@ -141,7 +141,7 @@ process MarkDuplicatesSpark
 
     // Output: BAM file with duplicates marked, and its index BAI file
     output:
-    tuple (val(population), path("${population}_duplicates_marked.bam"), path("${population}_duplicates_marked.bai"), emit: bam)
+    tuple (val(population), path("${population}_duplicates_marked.bam"), path("${population}_duplicates_marked.bam.bai"), emit: bam)
     path("${population}_duplicate_metrics.txt")
     path(".command.*"), emit: logs
 
@@ -150,22 +150,21 @@ process MarkDuplicatesSpark
     """
     ${params.gatk} --java-options '-Xmx${heap_mem}G -Xms${heap_mem}G' \\
         MarkDuplicatesSpark \\
-        --INPUT ${bam} \\
-        --METRICS_FILE ${population}_duplicate_metrics.txt \\
-        --OUTPUT ${population}_duplicates_marked.bam \\
-        --spark-master local[${task.cpus}] \
-        --conf 'spark.executor.cores=${task.cpus}' \
-        --conf 'spark.local.dir=./tmp_spark' \
-        --OPTICAL_DUPLICATE_PIXEL_DISTANCE 2500 \\
-        --VALIDATION_STRINGENCY SILENT \\
-        --ASSUME_SORTED true \\
-        --CREATE_INDEX true
+        -I ${bam} \\
+        -M ${population}_duplicate_metrics.txt \\
+        -O ${population}_duplicates_marked.bam \\
+        --spark-master local[${task.cpus}] \\
+        --conf 'spark.executor.cores=${task.cpus}' \\
+        --conf 'spark.local.dir=./tmp_spark' \\
+        --optical-duplicate-pixel-distance 2500 \\
+        --read-validation-stringency SILENT \\
+        --create-output-bam-index true
     """
 
     stub:
     """
     touch ${population}_duplicates_marked.bam
-    touch ${population}_duplicates_marked.bai
+    touch ${population}_duplicates_marked.bam.bai
     touch ${population}_duplicate_metrics.txt
     """
 }
@@ -176,8 +175,8 @@ process BaseRecalibrator {
     // and produces a recalibrated BAM file and a recalibration report.
 
     // label 'high_mem_single'
-    cpus 2
-    memory '16 GB'
+    cpus 16
+    memory '32 GB'
     debug params.debug
 
     // Publishing the recalibration table if required for future analyses
@@ -278,8 +277,8 @@ process HaplotypeCaller {
     // and outputs a GVCF file with the called variants.
 
     // label 'parallel_per_sample'
-    cpus 4
-    memory '16 GB'
+    cpus 16
+    memory '64 GB'
     debug params.debug
 
     // Publishing the VCF file and its index TBI file
@@ -329,8 +328,8 @@ process CombineGVCFs { // Maybe GenomicsDB is better here
     // It takes multiple GVCF files as input, combines them, and outputs a single merged GVCF file.
 
     // label 'io_intensive'
-    cpus 2
-    memory '32 GB'
+    cpus 32
+    memory '128 GB'
     debug params.debug
 
     // Publishing logs from the command execution
@@ -381,8 +380,8 @@ process GenotypeGVCFs {
     // It takes a combined GVCF file, applies the genotyping, and outputs a VCF file with the called variants.
 
     // label 'io_intensive'
-    cpus 2
-    memory '32 GB'
+    cpus 32
+    memory '128 GB'
     debug params.debug
 
     // Publishing logs from the command execution
@@ -433,8 +432,8 @@ process SelectVariants { // This could be broken into two different processes
     // and outputs a filtered VCF file containing only the selected variants.
 
     // label 'io_intensive'
-    cpus 1
-    memory '8 GB'
+    cpus 32
+    memory '128 GB'
     debug params.debug
 
     // Publishing logs from the command execution
@@ -498,8 +497,8 @@ process VariantFiltration { // Could be broken into two processes
     // and outputs a filtered VCF file with only the variants passing the criteria.
 
     // label 'io_intensive'
-    cpus 1
-    memory '16 GB'
+    cpus 32
+    memory '128 GB'
     debug params.debug
 
     // Publishing the filtered VCF
@@ -584,8 +583,8 @@ process SnpEff {
     // we use chromosome1 instead of chrom1 (or vice-versa)
 
     // label 'high_mem_single'
-    cpus 2
-    memory '8 GB'
+    cpus 32
+    memory '128 GB'
     debug params.debug
 
 
@@ -630,7 +629,7 @@ process SnpEff {
     script:
     def heap_mem = (task.memory.toGiga() * 0.9).toInteger()
     """
-    java -Xmx${heap_mem}G -Xms${heap_mem}G -jar /nfs6/TMP/Burke_Lab/shared_data/snpEff/snpEff.jar \
+    java -Xmx${heap_mem}G -Xms${heap_mem}G -jar snpEff \
         -v -dataDir ${params.scratch_directory} \
         -csvStats snpeff_stats.csv \
         ${params.snpeff_organism} \
@@ -651,8 +650,8 @@ process VariantsToTable {
     // It extracts specified fields from the VCF file and outputs them in a tabular format.
 
     // label 'io_intensive'
-    cpus 1
-    memory '16 GB'
+    cpus 32
+    memory '128 GB'
     debug params.debug
 
     // Publishing the txt files generated
@@ -718,7 +717,9 @@ process VariantsToTable {
 process VcfToTable {
     // Our own way to turn a VCF file into a R-readable table
 
-    label 'io_intensive'
+    // label 'io_intensive'
+    cpus 32
+    memory '128 GB'
     debug params.debug
 
     // Publishing the final resulting .txt files
@@ -794,8 +795,8 @@ workflow {
     // Run mapping processes with missing_vcf samples
     BwaMem( samples.missing_vcf )
     MergeSamFiles(BwaMem.out.bam.groupTuple())
-    MarkDuplicates(MergeSamFiles.out.bam)
-    BaseRecalibrator(MarkDuplicates.out.bam)
+    MarkDuplicatesSpark(MergeSamFiles.out.bam)
+    BaseRecalibrator(MarkDuplicatesSpark.out.bam)
     ApplyBQSR(BaseRecalibrator.out.bam)
     HaplotypeCaller(ApplyBQSR.out.bam)
 
