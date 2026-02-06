@@ -629,7 +629,7 @@ process SnpEff {
     script:
     def heap_mem = (task.memory.toGiga() * 0.9).toInteger()
     """
-    java -Xmx${heap_mem}G -Xms${heap_mem}G -jar snpEff \
+    snpEff -Xmx${heap_mem}G -Xms${heap_mem}G \
         -v -dataDir ${params.scratch_directory} \
         -csvStats snpeff_stats.csv \
         ${params.snpeff_organism} \
@@ -828,9 +828,9 @@ workflow {
     SelectVariants(GenotypeGVCFs.out.vcf)
     VariantFiltration(SelectVariants.out.vcf)
    
-    // // Annotation
-    // SnpEff(VariantFiltration.out.vcf.flatten())
-    // VariantsToTable(SnpEff.out.vcf)
+    // Annotation
+    SnpEff(VariantFiltration.out.vcf.flatten())
+    VariantsToTable(SnpEff.out.vcf)
    
     // Create the filtered_snps.txt file
     VcfToTable(VariantFiltration.out.vcf.flatten())
