@@ -4,7 +4,7 @@
 This is a README file for the Burke Lab Genomics Pipeline. It's purpose is to explain what's going on with the pipeline and how to run it properly.
 
 The purpose of this pipeline is to create a SNP and INDEL table from genomic data of many samples.
-You can start with a number of .fastq files for a number of samples OR one intermediate vcf file per sample.
+You can start with a number of `.fastq` files for a number of samples OR one intermediate `.vcf` file per sample.
 
 This pipeline follows this organizational structure:
 ```
@@ -41,11 +41,12 @@ ProjectName (e.g. 2023_FLYLONG)/
 ```
 
 ## How to run the pipeline
-1. First, ensure that you have your project directory (inside the lab's folder) with a subdirectory `raw` containing one subdirectory for each of your samples, and in each sample subdirectory, their respective `.fastq` files. Alternatively, you can start from intermediate vcf files. To do that, ensure that your project directory have a `vcf_files` subdirectory containing one subdirectory per sample, and in each subdirectory the `.vcf` (and `.tbi`) file of that sample.
+1. First, ensure that you have your project directory (inside the lab's folder) with a subdirectory `raw` containing one subdirectory for each of your samples, and in each sample subdirectory, their respective `.fastq` files. Alternatively, you can start from intermediate `.vcf` files. To do that, ensure that your project directory have a `vcf_files` subdirectory containing one subdirectory per sample, and in each subdirectory the `.vcf` (and `.tbi`) file of that sample.
 2. Inside your project directory, create the subdirectories `pipeline_runs`. Inside `pipeline_runs`, create a subdirectory with the name of your pipeline run. I advise it to be 'YYYY_MM_DD_roundXX'. That keeps the subdirectories organized and listed chronologically.
 3. Make sure that you have the `metadata_nextflow.csv` file inside the pipeline run directory.
-4. When that is ready, you can run the pipeline. Edit `nextflow.config`, changing `params.project` and `params.pipeline_run` with the names of your project (e.g. `2025_MULTI`) and pipeline run name (e.g. `2025_01_01_round01`).
-5. Cleanup time - run these steps to ensure that your scratch space is clean:
+4. Check if you have the appropriate reference genome and its annotations. See 'reference_genome/dmel.md' for more details. Place them in a directory, and make sure that directory is correctly defined in `nextflow.config`.
+5. When everything else is ready, you can run the pipeline. Edit `nextflow.config`, changing `params.project` and `params.pipeline_run` with the names of your project (e.g. `2025_MULTI`) and pipeline run name (e.g. `2025_01_01_round01`).
+6. Cleanup time - run these steps to ensure that your scratch space is clean:
 ```
 salloc -p burke_lab
 rm -rf /scratch/nextflow_pipeline_scratch/*
