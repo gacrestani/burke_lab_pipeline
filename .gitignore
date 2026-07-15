@@ -8,3 +8,5 @@
 !nextflow.config
 !run.sh
 !README.md
+!metadata_nextflow.example.csv
+!reference_genomes/dmel.md

@@ -44,7 +44,8 @@ process BwaMem {
     def samtools_threads = (task.cpus * 0.25).toInteger() ?: 1
     
     // Set memory per thread for samtools sort, ensuring a minimum of 2G
-    def mem_val = (task.memory.toGiga() / samtools_threads).toInteger()
+    //def mem_val = (task.memory.toGiga() / samtools_threads).toInteger()
+    def mem_val = (task.memory.toGiga() / (samtools_threads * 2)).toInteger()
     def mem_per_thread = "${Math.max(mem_val, 2)}G"
     
     """
@@ -55,7 +56,7 @@ process BwaMem {
         ${reads.join(' ')} \\
     | samtools sort \\
         --threads ${samtools_threads} \
-        -m ${mem_per_thread} \\
+        -m ${mem_per_thread}G \\
         -o ${reads[0].simpleName}_sorted.bam
     """
     
@@ -230,12 +231,11 @@ process ApplyBQSR {
     debug params.debug
     
     // Publishing the final BAM Files before turning then into VCFs
-    // Change: no need to save .bam files. Commenting out this section.
-    // publishDir (
-    //     path: "${params.results_directory}/intermediate_files/${population}",
-    //     mode: 'copy',
-    //     pattern: "*.bam*" // Publishes both .bam and .bai
-    // )
+    publishDir (
+        path: "${params.bam_directory}",
+        mode: 'copy',
+        pattern: "*.bam*" // Publishes both .bam and .bai
+    )
     publishDir (
         path: "${params.results_directory}/logs/${task.process}/${population}/",
         mode: 'copy',
@@ -793,7 +793,7 @@ workflow {
 
     // MAPPING
     // Run mapping processes with missing_vcf samples
-    BwaMem( samples.missing_vcf )
+    BwaMem( samples.present_vcf )
     MergeSamFiles(BwaMem.out.bam.groupTuple())
     MarkDuplicatesSpark(MergeSamFiles.out.bam)
     BaseRecalibrator(MarkDuplicatesSpark.out.bam)
